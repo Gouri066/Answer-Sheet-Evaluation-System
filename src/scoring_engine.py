@@ -59,9 +59,57 @@ def tokens(text):
     return TOKEN_RE.findall((text or "").lower())
 
 
+# Number-word equivalence for matching "Seven" with "7", "two" with "2", etc.
+_NUM_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+    "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+    "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+    "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70",
+    "eighty": "80", "ninety": "90", "hundred": "100", "thousand": "1000",
+}
+_DIGIT_WORDS = {v: k for k, v in _NUM_WORDS.items()}  # reverse: "7" -> "seven"
+
+
 def _normalise_for_match(text):
     """Lowercase, collapse whitespace, strip punctuation — for exact-match comparison."""
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
+
+
+def _answers_equivalent(student_norm, model_norm):
+    """Check if two normalised answers are equivalent, including number-word matching.
+
+    E.g. "seven" == "7", "10" == "ten", "sixty" == "60".
+    """
+    if not student_norm or not model_norm:
+        return False
+    if student_norm == model_norm:
+        return True
+
+    # Try converting number words to digits and vice versa
+    def to_digits(s):
+        words = s.split()
+        return " ".join(_NUM_WORDS.get(w, w) for w in words)
+
+    def to_words(s):
+        words = s.split()
+        return " ".join(_DIGIT_WORDS.get(w, w) for w in words)
+
+    # student "seven" → "7", compare with model "7"
+    if to_digits(student_norm) == model_norm:
+        return True
+    if to_digits(model_norm) == student_norm:
+        return True
+    # student "7" → "seven", compare with model "seven"
+    if to_words(student_norm) == model_norm:
+        return True
+    if to_words(model_norm) == student_norm:
+        return True
+    # both converted to digits
+    if to_digits(student_norm) == to_digits(model_norm):
+        return True
+    return False
 
 
 def generate_keywords(model_answer, question="", limit=12):
@@ -253,9 +301,10 @@ class ScoringEngine:
             else:
                 # --- Exact-match shortcut: normalised student answer == normalised model answer ---
                 # Handles short/numeric fill-in-the-blank answers perfectly (e.g. "35" == "35").
+                # Also handles number-word equivalence (e.g. "Seven" == "7").
                 model_norm = _normalise_for_match(q["model_answer"])
                 student_norm = _normalise_for_match(text)
-                if model_norm and student_norm == model_norm:
+                if model_norm and _answers_equivalent(student_norm, model_norm):
                     all_kws = [k for k, _ in self._kw.get(n, [])]
                     res.update(grammar=1.0, keyword=1.0, semantic=1.0, matched=all_kws, missing=[],
                                marks=float(q["max_marks"]), note="Exact match")
