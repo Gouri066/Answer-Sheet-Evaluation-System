@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ exam.title }} · {% endblock %}
+{% block head %}{% if pending %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% macro mark(total, out_of) %}<span class="pen">{{ '%g' % total }}<small>/{{ '%g' % out_of }}</small></span>{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ exam.title }}</h1>
+    <p class="muted">{% if exam.subject %}{{ exam.subject }} · {% endif %}{{ q.n }} question{{ '' if q.n == 1 else 's' }}, {{ '%g' % (q.total_marks or 0) }} marks in total</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="{{ url_for('main.exam_key', exam_id=exam.id) }}">Edit questions and answers</a>
+    {% if subs %}<a class="btn secondary" href="{{ url_for('main.export_csv', exam_id=exam.id) }}">Download results (CSV)</a>{% endif %}
+  </div>
+</div>
+
+{% if q.n == 0 %}
+  <div class="flash error">This exam has no questions yet. <a href="{{ url_for('main.exam_key', exam_id=exam.id) }}">Add them</a> before uploading answer sheets.</div>
+{% elif q.no_answer %}
+  <div class="flash warn">{{ q.no_answer }} question{{ '' if q.no_answer == 1 else 's' }} ha{{ 's' if q.no_answer == 1 else 've' }} no model answer and will score zero. <a href="{{ url_for('main.exam_key', exam_id=exam.id) }}">Fill them in</a>.</div>
+{% endif %}
+{% if pending %}<div class="flash warn">Scoring {{ pending }} sheet{{ '' if pending == 1 else 's' }}. This page refreshes by itself.</div>{% endif %}
+{% if stale %}
+<div class="flash warn">
+  <form class="inline" method="post" action="{{ url_for('main.reevaluate', exam_id=exam.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    The questions or answers changed after {{ stale }} sheet{{ '' if stale == 1 else 's' }} {{ 'was' if stale == 1 else 'were' }} scored.
+    <button class="link" type="submit">Score them again</button>
+  </form>
+</div>
+{% endif %}
+
+<form class="panel" method="post" action="{{ url_for('main.upload_sheets', exam_id=exam.id) }}" enctype="multipart/form-data">
+  <h2>Upload answer sheets</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Student answer sheets <small>(PDF, image or TXT files, or one ZIP of them)</small>
+    <input type="file" name="sheets" accept=".pdf,.png,.jpg,.jpeg,.txt,.zip" multiple required></label>
+  <p class="hint">Name files like <strong>S001_Asha_Rao.pdf</strong> so the roll number and name are filled in. A "Roll No:" and "Name:" line at the top of the sheet works too.</p>
+  <button type="submit">Upload and score</button>
+</form>
+
+<h2>Results</h2>
+{% if stats %}
+<div class="stats">
+  <div><strong>{{ stats.n }}</strong><span class="muted small">scored</span></div>
+  <div><strong>{{ '%.1f' % stats.avg }}%</strong><span class="muted small">average</span></div>
+  <div><strong>{{ '%.1f' % stats.max }}%</strong><span class="muted small">highest</span></div>
+  <div><strong>{{ '%.1f' % stats.min }}%</strong><span class="muted small">lowest</span></div>
+</div>
+{% endif %}
+{% if subs %}
+<div class="table-wrap"><table>
+  <thead><tr>
+    <th><a href="?sort=roll">Roll no.</a></th><th><a href="?sort=name">Name</a></th><th>File</th>
+    <th class="num"><a href="?sort=score">Score</a></th><th class="num">%</th><th>Status</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for s in subs %}
+    <tr>
+      <td>{{ s.roll_no or '–' }}{% if s.roll_no and s.roll_no.lower() in dupes %} <span class="badge error" title="Another sheet has this roll number">duplicate</span>{% endif %}</td>
+      <td>{{ s.name or '–' }}</td>
+      <td class="muted small">{{ s.filename }}</td>
+      <td class="num">{% if s.status == 'done' %}{{ mark(s.total, s.max_total) }}{% endif %}</td>
+      <td class="num">{% if s.status == 'done' %}{{ '%.1f' % s.percentage }}{% endif %}</td>
+      <td><span class="badge {{ s.status }}">{{ {'done': 'Scored', 'pending': 'Waiting', 'processing': 'Scoring', 'error': 'Failed'}[s.status] }}</span>
+        {% if s.status == 'error' %}<div class="small muted">{{ s.note }}</div>{% endif %}</td>
+      <td><a href="{{ url_for('main.submission_detail', sub_id=s.id) }}">Open</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="muted">No answer sheets yet. Upload them above.</p>
+{% endif %}
+
+<details class="panel">
+  <summary>Replace the question paper or answer key</summary>
+  <form method="post" action="{{ url_for('main.exam_import', exam_id=exam.id) }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p class="hint">This replaces all current questions and answers. Sheets that were already scored keep their old scores until you score them again.</p>
+    <label>Question paper <small>(optional)</small> <input type="file" name="question_paper" accept=".pdf,.txt,.csv"></label>
+    <label>Answer key <input type="file" name="answer_key" accept=".pdf,.txt,.csv" required></label>
+    <button type="submit" class="secondary">Read the files</button>
+  </form>
+</details>
+
+<div class="actions">
+  {% if subs %}
+  <form class="inline" method="post" action="{{ url_for('main.reevaluate', exam_id=exam.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="secondary" type="submit">Score all sheets again</button>
+  </form>
+  {% endif %}
+  <form class="inline" method="post" action="{{ url_for('main.exam_delete', exam_id=exam.id) }}" data-confirm="Delete this exam, its questions and every uploaded answer sheet? This cannot be undone.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="danger" type="submit">Delete exam</button>
+  </form>
+</div>
+{% endblock %}

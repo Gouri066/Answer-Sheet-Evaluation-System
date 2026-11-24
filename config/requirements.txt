@@ -1,0 +1,13 @@
+# --- web app + core pipeline ---
+flask>=3.0
+pymupdf>=1.24
+pdfplumber
+pandas
+numpy
+scikit-learn
+nltk
+textblob
+sentence-transformers   # semantic similarity (falls back to TF-IDF if unavailable)
+
+# --- optional: scanned / photographed answer sheets ---
+# easyocr

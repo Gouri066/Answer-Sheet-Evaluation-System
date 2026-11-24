@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}New exam · {% endblock %}
+{% block content %}
+<h1>New exam</h1>
+<p class="muted">Upload the question paper and the model answers. You can review and edit every question before grading starts.</p>
+<form method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="panel">
+    <h2>Exam details</h2>
+    <div class="row">
+      <label>Title <input type="text" name="title" value="{{ form.title }}" required maxlength="150"></label>
+      <label>Subject <small>(optional)</small> <input type="text" name="subject" value="{{ form.subject }}" maxlength="100"></label>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Files</h2>
+    <label>Question paper <small>(PDF, TXT or CSV, optional)</small>
+      <input type="file" name="question_paper" accept=".pdf,.txt,.csv"></label>
+    <label>Answer key <small>(PDF, TXT or CSV with the model answers)</small>
+      <input type="file" name="answer_key" accept=".pdf,.txt,.csv" required></label>
+    <p class="hint">Number each item <strong>Q1:</strong>, <strong>1.</strong> or <strong>1)</strong>. A CSV needs columns <em>Question Number, Question, Answer</em> and optionally <em>Marks</em>. Add "(5 marks)" at the end of a question to set its marks.</p>
+  </div>
+  <div class="panel">
+    <h2>Scoring</h2>
+    <div class="row">
+      <label>Marks per question <small>(default)</small> <input type="number" name="default_marks" value="{{ form.default_marks }}" min="0.5" max="100" step="0.5"></label>
+      <label>Spelling and grammar % <input type="number" name="w_grammar" value="{{ form.w_grammar|int }}" min="0" max="100"></label>
+      <label>Keywords % <input type="number" name="w_keyword" value="{{ form.w_keyword|int }}" min="0" max="100"></label>
+      <label>Meaning match % <input type="number" name="w_semantic" value="{{ form.w_semantic|int }}" min="0" max="100"></label>
+    </div>
+    <p class="hint">The three percentages are relative weights. You can change them per question later.</p>
+  </div>
+  <button type="submit">Read the files</button>
+</form>
+{% endblock %}

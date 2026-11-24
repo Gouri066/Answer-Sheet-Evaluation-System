@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Account · {% endblock %}
+{% block content %}
+<h1>Account</h1>
+<p class="muted">Signed in as {{ g.teacher.username }}.</p>
+<form class="panel narrow" method="post">
+  <h2>Change password</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Current password <input type="password" name="current_password" autocomplete="current-password" required></label>
+  <label>New password <small>(at least 8 characters)</small> <input type="password" name="new_password" autocomplete="new-password" required></label>
+  <label>Repeat new password <input type="password" name="confirm_password" autocomplete="new-password" required></label>
+  <button type="submit">Change password</button>
+</form>
+{% endblock %}

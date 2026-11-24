@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ sub.name or sub.roll_no or sub.filename }} · {% endblock %}
+{% macro pct(v) %}{{ (v * 100)|round|int }}%{% endmacro %}
+{% block content %}
+<p class="small"><a href="{{ url_for('main.exam_detail', exam_id=exam.id) }}">&larr; {{ exam.title }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ sub.name or 'Unnamed student' }}{% if sub.roll_no %} <span class="muted">({{ sub.roll_no }})</span>{% endif %}</h1>
+    <p class="muted small">{{ sub.filename }} · <a href="{{ url_for('main.submission_file', sub_id=sub.id) }}" target="_blank" rel="noopener">view original sheet</a></p>
+  </div>
+  {% if sub.status == 'done' %}
+  <div><span class="pen big">{{ '%g' % sub.total }}<small>/{{ '%g' % sub.max_total }}</small></span>
+    <div class="muted small">{{ '%.1f' % sub.percentage }}%</div></div>
+  {% endif %}
+</div>
+
+{% if sub.status == 'error' %}<div class="flash error">{{ sub.note }}</div>
+{% elif sub.status != 'done' %}<div class="flash warn">This sheet is still being scored. Reload in a moment.</div>
+{% elif sub.note %}<div class="flash warn">{{ sub.note }}</div>{% endif %}
+{% if sub.backend == 'tfidf' %}<p class="hint">Meaning match used word-overlap similarity because the sentence-transformers model isn't installed.</p>{% endif %}
+
+<details class="panel">
+  <summary>Fix roll number or name</summary>
+  <form method="post" action="{{ url_for('main.submission_identity', sub_id=sub.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="row">
+      <label>Roll number <input type="text" name="roll_no" value="{{ sub.roll_no }}" maxlength="40"></label>
+      <label>Name <input type="text" name="name" value="{{ sub.name }}" maxlength="100"></label>
+    </div>
+    <button type="submit" class="secondary">Save</button>
+  </form>
+</details>
+
+{% for r in rows %}
+<article class="qa">
+  <header>
+    <h3>Q{{ r.number }}{% if r.question %}. {{ r.question }}{% endif %}</h3>
+    <span class="pen">{{ '%g' % r.marks }}<small>/{{ '%g' % r.max_marks }}</small></span>
+  </header>
+  <div class="cols">
+    <div><h4>Student's answer</h4>{% if r.answer_text %}<p>{{ r.answer_text }}</p>{% else %}<p class="empty">{{ r.note or 'No answer found' }}</p>{% endif %}</div>
+    <div><h4>Model answer</h4><p>{{ r.model_answer or '–' }}</p></div>
+  </div>
+  {% if r.answer_text %}
+  <div class="parts">
+    <span>Spelling {{ pct(r.grammar) }}</span>
+    <span>Meaning match {{ pct(r.semantic) }}</span>
+    <span>Keywords {{ r.matched|length }} of {{ r.matched|length + r.missing|length }}:
+      {% for k in r.matched %}<span class="kw hit">{{ k }}</span>{% endfor %}{% for k in r.missing %}<span class="kw miss">{{ k }}</span>{% endfor %}</span>
+  </div>
+  {% endif %}
+</article>
+{% endfor %}
+
+<form class="inline" method="post" action="{{ url_for('main.submission_delete', sub_id=sub.id) }}" data-confirm="Remove this answer sheet and its scores?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button class="danger" type="submit">Remove this sheet</button>
+</form>
+{% endblock %}
