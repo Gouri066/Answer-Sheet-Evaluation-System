@@ -12,6 +12,8 @@ Improvements over the prototype:
   * grammar credit is scaled by relevance, so a well-spelled but unrelated answer earns nothing;
   * semantic similarity is calibrated and batched, and falls back to TF-IDF cosine similarity
     when sentence-transformers (or its model download) is unavailable.
+  * exact-match shortcut: when the normalised student answer matches the model answer,
+    full marks are awarded immediately (handles short / numeric answers).
 """
 import logging
 import os
@@ -55,6 +57,11 @@ WORD_RE = re.compile(r"[A-Za-z']+")
 
 def tokens(text):
     return TOKEN_RE.findall((text or "").lower())
+
+
+def _normalise_for_match(text):
+    """Lowercase, collapse whitespace, strip punctuation — for exact-match comparison."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
 
 
 def generate_keywords(model_answer, question="", limit=12):
@@ -244,17 +251,34 @@ class ScoringEngine:
                 res["note"] = "No answer found"
                 res["missing"] = [k for k, _ in self._kw.get(n, [])]
             else:
-                k, matched, missing = self.keyword_score(text, n)
-                s = sem.get(n, 0.0)
-                g, _errs = grammar_score(text, self._white[n], self.speller)
-                relevance = max(k or 0.0, s)
-                g_eff = g * min(1.0, relevance * 2)  # grammar only counts if the answer is on topic
-                wg, wk, ws = float(q["w_grammar"]), float(q["w_keyword"]), float(q["w_semantic"])
-                if k is None:  # no keywords defined: hand their weight to the other two parts
-                    wk, k = 0.0, 0.0
-                total_w = wg + wk + ws
-                frac = (wg * g_eff + wk * k + ws * s) / total_w if total_w > 0 else 0.0
-                res.update(grammar=g, keyword=k, semantic=s, matched=matched, missing=missing,
-                           marks=round(res["max_marks"] * min(1.0, max(0.0, frac)), 2))
+                # --- Exact-match shortcut: normalised student answer == normalised model answer ---
+                # Handles short/numeric fill-in-the-blank answers perfectly (e.g. "35" == "35").
+                model_norm = _normalise_for_match(q["model_answer"])
+                student_norm = _normalise_for_match(text)
+                if model_norm and student_norm == model_norm:
+                    all_kws = [k for k, _ in self._kw.get(n, [])]
+                    res.update(grammar=1.0, keyword=1.0, semantic=1.0, matched=all_kws, missing=[],
+                               marks=float(q["max_marks"]), note="Exact match")
+                # --- Also check if model answer is *contained* in the student text ---
+                # Covers cases where the student echoed the question alongside the answer
+                # (e.g. "25 + 10 = 35" contains model answer "35").
+                # Use word-boundary matching to avoid false positives ("10" in "100").
+                elif model_norm and re.search(r"(?<!\w)" + re.escape(model_norm) + r"(?!\w)", student_norm):
+                    all_kws = [k for k, _ in self._kw.get(n, [])]
+                    res.update(grammar=1.0, keyword=1.0, semantic=1.0, matched=all_kws, missing=[],
+                               marks=float(q["max_marks"]), note="Answer contains exact model answer")
+                else:
+                    k, matched, missing = self.keyword_score(text, n)
+                    s = sem.get(n, 0.0)
+                    g, _errs = grammar_score(text, self._white[n], self.speller)
+                    relevance = max(k or 0.0, s)
+                    g_eff = g * min(1.0, relevance * 2)  # grammar only counts if the answer is on topic
+                    wg, wk, ws = float(q["w_grammar"]), float(q["w_keyword"]), float(q["w_semantic"])
+                    if k is None:  # no keywords defined: hand their weight to the other two parts
+                        wk, k = 0.0, 0.0
+                    total_w = wg + wk + ws
+                    frac = (wg * g_eff + wk * k + ws * s) / total_w if total_w > 0 else 0.0
+                    res.update(grammar=g, keyword=k, semantic=s, matched=matched, missing=missing,
+                               marks=round(res["max_marks"] * min(1.0, max(0.0, frac)), 2))
             results.append(res)
         return results

@@ -22,6 +22,13 @@ ANS_PREFIX_RE = re.compile(
 )
 # 1)  1.  (1)  97:   - number followed by a delimiter and whitespace ("1.5" / "10:30" don't match)
 BARE_RE = re.compile(r"^\s*\(?\s*(\d{1,3})\s*[:.)\]](?=\s|$)\s*(.*)$")
+# Fallback: OCR often drops the period/delimiter after a question number, leaving
+# just "1 answer text" or "3  IOC 40 60".  We accept a bare number followed by
+# whitespace (no delimiter) only when the number is in valid_numbers, so we don't
+# accidentally split prose paragraphs on stray numbers.
+# The rest must NOT start with a math operator (+, -, *, ×, =) which would indicate
+# the number is part of an expression like "5 * 2" rather than a question marker.
+BARE_NODELIM_RE = re.compile(r"^\s*(\d{1,3})\s{1,4}(?![+\-*/×=])(\S.*)$")
 
 PAGE_NUM_RE = re.compile(r"^\s*(?:page\s*)?\d{1,3}(?:\s*(?:of|/)\s*\d{1,3})?\s*$", re.IGNORECASE)
 ANS_SPLIT_RE = re.compile(r"(?:^|\s)(?:ans(?:wer)?|solution)\s*[:\-\u2013]\s*", re.IGNORECASE)
@@ -88,6 +95,16 @@ class AnswerParser:
             else:
                 buf.append(line)
         flush()
+
+        # --- Fallback: if no numbered blocks were detected, try extracting from "Ans:" labels ---
+        # This handles sheets where OCR drops question numbers but preserves "Ans:" labels,
+        # e.g. EasyOCR reads "(1.) 25+10=?\n Ans: 35" as "25 + [0\n Ans: 35" (number lost).
+        if not blocks and valid_numbers:
+            fallback = self._extract_by_ans_labels(text, valid_numbers)
+            if fallback:
+                warnings.append("Question numbers were not detected; answers were matched by 'Ans:' label order.")
+                return fallback, header, warnings
+
         return blocks, header, warnings
 
     def parse(self, pdf_path):
@@ -114,20 +131,71 @@ class AnswerParser:
             if sequential_bare and n != (max(seen) + 1 if seen else 1):
                 return None
             return n, m.group(2).strip()
+        # Fallback: try bare number *without* delimiter (common in OCR output).
+        # Only accept when valid_numbers is given and n is in that set,
+        # to avoid false positives in long-form text.
+        m = BARE_NODELIM_RE.match(line)
+        if m:
+            n = int(m.group(1))
+            if n < 1 or n in seen:
+                return None
+            if valid_numbers is None or n not in valid_numbers:
+                return None
+            if sequential_bare and n != (max(seen) + 1 if seen else 1):
+                return None
+            return n, m.group(2).strip()
         return None
 
     @staticmethod
+    def _extract_by_ans_labels(text, valid_numbers):
+        """Fallback: extract answers from 'Ans:' / 'Answer:' labels in sequential order.
+
+        When OCR drops question numbers but preserves 'Ans:' labels, we assign
+        answers to question numbers in order: first Ans: → Q1, second → Q2, etc.
+        """
+        ANS_LABEL_RE = re.compile(
+            r"^\s*(?:ans(?:wer)?)\s*[:.)\-\u2013]\s*(.*)$",
+            re.IGNORECASE,
+        )
+        expected = sorted(valid_numbers)
+        answers = {}
+        idx = 0
+        for line in (text or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = ANS_LABEL_RE.match(line)
+            if m and idx < len(expected):
+                ans_text = m.group(1).strip()
+                if ans_text:  # skip empty "Ans:" lines
+                    answers[expected[idx]] = ans_text
+                idx += 1
+        return answers if answers else None
+
+    @staticmethod
     def clean_answer(block, question_text=""):
-        """Remove an echoed question and/or an 'Answer:' label from a detected block."""
+        """Remove an echoed question and/or an 'Answer:' label from a detected block.
+
+        For fill-in-the-blank questions (containing blanks like ____ or = ___),
+        also try to extract just the filled-in portion.
+        """
         if not block:
             return ""
         m = ANS_SPLIT_RE.search(block)
         if m:
             return block[m.end():].strip()
         if question_text:
-            q = re.sub(r"\s+", " ", question_text).strip().lower()
-            if q and block.lower().startswith(q):
-                return block[len(q):].lstrip(" :-\u2013").strip()
+            q_norm = re.sub(r"\s+", " ", question_text).strip().lower()
+            b_norm = re.sub(r"\s+", " ", block).strip().lower()
+            if q_norm and b_norm.startswith(q_norm):
+                return block[len(q_norm):].lstrip(" :-\u2013").strip()
+            # Fill-in-the-blank: the question has underscores/blanks; the student's
+            # answer echoes the question but with the blank replaced by a value.
+            # Try to match the question text around the blank and extract the answer.
+            if "_" in question_text or "____" in question_text:
+                answer = _extract_fill_in_blank(block, question_text)
+                if answer:
+                    return answer
         return block
 
     @staticmethod
@@ -152,3 +220,45 @@ class AnswerParser:
                 if m:
                     name = m.group(1).strip(" .")
         return {"roll_no": roll, "name": name}
+
+
+def _extract_fill_in_blank(block, question_text):
+    """Extract the filled-in answer from a block that echoes a fill-in-the-blank question.
+
+    Example: question = "25 + 10 = ____", block = "25 + Ic 35" -> "35"
+             question = "1 rupee = ____ paise", block = "rupee [0o paise" -> "[0o paise"
+    """
+    # Split question on blanks (sequences of underscores)
+    parts = re.split(r"_{2,}", question_text)
+    if len(parts) < 2:
+        return None
+    # Normalise: lowercase, collapse whitespace, strip math operators for fuzzy matching
+    def norm(s):
+        return re.sub(r"\s+", " ", s).strip().lower()
+    # The last non-empty part before the blank and the first non-empty part after
+    before = norm(parts[0])
+    after = norm(parts[-1]) if len(parts) > 1 else ""
+    block_norm = norm(block)
+    # Try to find the answer between the before/after context in the block
+    # Use a fuzzy approach: find the last few words of "before" in the block
+    if before:
+        before_words = before.split()
+        # Try matching the last 1-3 words of "before" at the start/middle of block
+        for n_words in range(min(3, len(before_words)), 0, -1):
+            tail = " ".join(before_words[-n_words:])
+            idx = block_norm.find(tail)
+            if idx >= 0:
+                start = idx + len(tail)
+                rest = block_norm[start:].strip()
+                if after and rest.endswith(after.rstrip(".")):
+                    rest = rest[:-(len(after.rstrip(".")))].strip()
+                if rest:
+                    # Return the corresponding portion from the original block
+                    orig_rest = block[start:].strip()
+                    if after:
+                        after_clean = after.rstrip(".")
+                        orig_norm = norm(orig_rest)
+                        if orig_norm.endswith(after_clean):
+                            orig_rest = orig_rest[:-(len(after_clean))].strip()
+                    return orig_rest
+    return None

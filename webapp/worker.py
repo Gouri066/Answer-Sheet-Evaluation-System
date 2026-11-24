@@ -1,4 +1,10 @@
-"""Background evaluation: extract text -> detect answers -> score -> save."""
+"""Background evaluation: extract text -> detect answers -> score -> save.
+
+Pipeline (in order of preference):
+  1. Gemini Vision AI  (set GEMINI_API_KEY env var) — reads any layout / handwriting
+  2. EasyOCR + regex   (pip install easyocr)        — basic OCR for scanned sheets
+  3. Text extraction   (PyMuPDF)                     — for digital / typed PDFs
+"""
 import json
 import logging
 import os
@@ -83,7 +89,7 @@ def process_exam(exam_id):
             conn.execute("UPDATE submissions SET status = 'processing' WHERE id = ?", (sub["id"],))
             conn.commit()
             try:
-                _evaluate(conn, sub, engine, parser, processor, by_num)
+                _evaluate(conn, sub, engine, parser, processor, by_num, questions)
             except OCRUnavailable as exc:
                 _fail(conn, sub["id"], str(exc))
             except ValueError as exc:  # expected problems: unreadable file, no answers detected
@@ -102,37 +108,104 @@ def _fail(conn, sub_id, message):
     conn.commit()
 
 
-def _evaluate(conn, sub, engine, parser, processor, by_num):
+def _try_gemini_vision(file_path, questions):
+    """Try extracting answers using Gemini Vision AI. Returns dict or None."""
+    try:
+        from src.vision_ocr import is_available, extract_from_file
+
+        if not is_available():
+            return None
+
+        log.info("Using Gemini Vision AI for %s", os.path.basename(file_path))
+        return extract_from_file(file_path, questions)
+    except Exception as exc:
+        log.warning("Gemini Vision failed, falling back to OCR: %s", exc)
+        return None
+
+
+def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
     notes = []
     raw, roll, name = sub["raw_text"], sub["roll_no"], sub["name"]
     valid = set(by_num)
+    answers = {}
+    used_gemini = False
 
     if raw is None:  # first time: read the file
-        result = processor.extract(sub["stored_path"])
-        raw = result.text
-        notes += result.warnings
-        if result.ocr_pages:
-            notes.append(f"{result.ocr_pages} page(s) were read with OCR - please spot-check the answers.")
-        if not raw.strip():
-            raise ValueError("No readable text was found. If this is a scan, install OCR support (pip install easyocr).")
-        blocks, header, warns = parser.parse_text(raw, valid)
-        found = parser.extract_header(header)
-        roll = found["roll_no"] or roll
-        name = found["name"] or name
-    else:
-        blocks, _, warns = parser.parse_text(raw, valid)
-    notes += warns
+        # --- Strategy 1: Try Gemini Vision AI (handles any layout/handwriting) ---
+        gemini_result = _try_gemini_vision(sub["stored_path"], questions)
 
-    answers, unknown = {}, []
-    for n, block in blocks.items():
-        if n in by_num:
-            answers[n] = parser.clean_answer(block, by_num[n]["question"])
-        else:
-            unknown.append(n)
+        if gemini_result and gemini_result.get("answers"):
+            used_gemini = True
+            raw = gemini_result["raw_text"]
+            roll = gemini_result["roll_no"] or roll
+            name = gemini_result["name"] or name
+            notes += gemini_result.get("warnings", [])
+
+            # Use answers directly from Gemini (already structured)
+            for n, ans_text in gemini_result["answers"].items():
+                if n in by_num and ans_text:
+                    answers[n] = ans_text
+
+            if not answers:
+                log.info("Gemini returned no matching answers, falling back to OCR")
+                used_gemini = False
+                raw = None  # reset so fallback runs
+
+        # --- Strategy 2: Fallback to EasyOCR + regex parsing ---
+        if not used_gemini:
+            result = processor.extract(sub["stored_path"])
+            raw = result.text
+            notes += result.warnings
+            if result.ocr_pages:
+                notes.append(f"{result.ocr_pages} page(s) were read with OCR - please spot-check the answers.")
+            if not raw.strip():
+                raise ValueError("No readable text was found. If this is a scan, install OCR support "
+                                 "(pip install easyocr) or set GEMINI_API_KEY for AI-powered reading.")
+            blocks, header, warns = parser.parse_text(raw, valid)
+            notes += warns
+            found = parser.extract_header(header)
+            roll = found["roll_no"] or roll
+            name = found["name"] or name
+
+            unknown = []
+            for n, block in blocks.items():
+                if n in by_num:
+                    answers[n] = parser.clean_answer(block, by_num[n]["question"])
+                else:
+                    unknown.append(n)
+            if unknown:
+                notes.append("Ignored answers for question numbers not in the key: "
+                             + ", ".join(f"Q{n}" for n in sorted(unknown)[:15]))
+
+    else:
+        # Re-evaluation with stored raw_text
+        # Try Gemini Vision again from the original file (re-reads the image)
+        gemini_result = _try_gemini_vision(sub["stored_path"], questions)
+
+        if gemini_result and gemini_result.get("answers"):
+            used_gemini = True
+            raw = gemini_result["raw_text"]
+            roll = gemini_result["roll_no"] or roll
+            name = gemini_result["name"] or name
+            notes += gemini_result.get("warnings", [])
+
+            for n, ans_text in gemini_result["answers"].items():
+                if n in by_num and ans_text:
+                    answers[n] = ans_text
+        
+        if not used_gemini:
+            # Fallback: re-parse the stored raw text
+            blocks, _, warns = parser.parse_text(raw, valid)
+            notes += warns
+
+            for n, block in blocks.items():
+                if n in by_num:
+                    answers[n] = parser.clean_answer(block, by_num[n]["question"])
+
     if not answers:
-        raise ValueError("No numbered answers were detected (expected Q1:, 1., 1) ...).")
-    if unknown:
-        notes.append("Ignored answers for question numbers not in the key: " + ", ".join(f"Q{n}" for n in sorted(unknown)[:15]))
+        raise ValueError("No answers were detected. Try setting GEMINI_API_KEY for AI-powered reading, "
+                         "or check that answers are numbered (Q1:, 1., 1) ...).")
+
     unanswered = [n for n in by_num if not answers.get(n)]
     if unanswered:
         notes.append(f"No answer found for {len(unanswered)} question(s).")
@@ -141,6 +214,8 @@ def _evaluate(conn, sub, engine, parser, processor, by_num):
     total = round(sum(r["marks"] for r in results), 2)
     max_total = round(sum(r["max_marks"] for r in results), 2)
     pct = round(total / max_total * 100, 2) if max_total else 0.0
+
+    backend_label = "gemini-vision" if used_gemini else engine.backend
 
     conn.execute("DELETE FROM answers WHERE submission_id = ?", (sub["id"],))
     conn.executemany(
@@ -151,5 +226,5 @@ def _evaluate(conn, sub, engine, parser, processor, by_num):
     conn.execute(
         "UPDATE submissions SET raw_text=?, roll_no=?, name=?, status='done', note=?, total=?, max_total=?,"
         " percentage=?, backend=?, evaluated_at=? WHERE id=?",
-        (raw, roll, name, " ".join(notes)[:1000], total, max_total, pct, engine.backend, now(), sub["id"]))
+        (raw, roll, name, " ".join(notes)[:1000], total, max_total, pct, backend_label, now(), sub["id"]))
     conn.commit()

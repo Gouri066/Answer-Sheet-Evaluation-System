@@ -9,5 +9,8 @@ nltk
 textblob
 sentence-transformers   # semantic similarity (falls back to TF-IDF if unavailable)
 
-# --- optional: scanned / photographed answer sheets ---
+# --- AI-powered answer sheet reading (recommended) ---
+google-generativeai     # Gemini Vision: reads any handwriting/layout (set GEMINI_API_KEY)
+
+# --- optional: basic OCR fallback for scanned sheets ---
 # easyocr
