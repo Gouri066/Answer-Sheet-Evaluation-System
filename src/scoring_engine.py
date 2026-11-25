@@ -72,10 +72,21 @@ _NUM_WORDS = {
 _DIGIT_WORDS = {v: k for k, v in _NUM_WORDS.items()}  # reverse: "7" -> "seven"
 
 
+# def _normalise_for_match(text):
+#     """Lowercase, collapse whitespace, strip punctuation — for exact-match comparison."""
+#     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
 def _normalise_for_match(text):
-    """Lowercase, collapse whitespace, strip punctuation — for exact-match comparison."""
-    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
+    """Normalize answers so different separators are treated equally."""
+    text = (text or "").lower().strip()
 
+    # Treat 'and' as a separator, just like a comma.
+    text = re.sub(r"\b(?:and)\b", " ", text)
+
+    # Remove punctuation and standardize spaces.
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 def _answers_equivalent(student_norm, model_norm):
     """Check if two normalised answers are equivalent, including number-word matching.

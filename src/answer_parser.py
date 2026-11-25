@@ -30,7 +30,10 @@ BARE_RE = re.compile(r"^\s*\(?\s*(\d{1,3})\s*[:.)\]](?=\s|$)\s*(.*)$")
 # the number is part of an expression like "5 * 2" rather than a question marker.
 BARE_NODELIM_RE = re.compile(r"^\s*(\d{1,3})\s{1,4}(?![+\-*/×=])(\S.*)$")
 
-PAGE_NUM_RE = re.compile(r"^\s*(?:page\s*)?\d{1,3}(?:\s*(?:of|/)\s*\d{1,3})?\s*$", re.IGNORECASE)
+PAGE_NUM_RE = re.compile(
+    r"^\s*(?:page\s+\d{1,3}|\d{1,3}\s*(?:of|/)\s*\d{1,3})\s*$",
+    re.IGNORECASE,
+)
 ANS_SPLIT_RE = re.compile(r"(?:^|\s)(?:ans(?:wer)?|solution)\s*[:\-\u2013]\s*", re.IGNORECASE)
 
 ROLL_RE = re.compile(
@@ -134,16 +137,38 @@ class AnswerParser:
         # Fallback: try bare number *without* delimiter (common in OCR output).
         # Only accept when valid_numbers is given and n is in that set,
         # to avoid false positives in long-form text.
-        m = BARE_NODELIM_RE.match(line)
-        if m:
-            n = int(m.group(1))
-            if n < 1 or n in seen:
-                return None
-            if valid_numbers is None or n not in valid_numbers:
-                return None
-            if sequential_bare and n != (max(seen) + 1 if seen else 1):
-                return None
-            return n, m.group(2).strip()
+        # m = BARE_NODELIM_RE.match(line)
+        # if m:
+        #     n = int(m.group(1))
+        #     if n < 1 or n in seen:
+        #         return None
+        #     if valid_numbers is None or n not in valid_numbers:
+        #         return None
+        #     if sequential_bare and n != (max(seen) + 1 if seen else 1):
+        #         return None
+        #     return n, m.group(2).strip()
+        # return None
+                # Fallback for OCR-damaged numbering without punctuation.
+        # Only use this when sequential_bare=True, such as when
+        # parsing numbered question papers or answer keys.
+        # For student answer sheets, "7 continents" could be an answer,
+        # not a question marker.
+        if sequential_bare:
+            m = BARE_NODELIM_RE.match(line)
+            if m:
+                n = int(m.group(1))
+
+                if n < 1 or n in seen:
+                    return None
+
+                if valid_numbers is not None and n not in valid_numbers:
+                    return None
+
+                if n != (max(seen) + 1 if seen else 1):
+                    return None
+
+                return n, m.group(2).strip()
+
         return None
 
     @staticmethod
