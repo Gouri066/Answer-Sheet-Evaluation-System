@@ -1,14 +1,33 @@
+
 {% extends "base.html" %}
 {% block title %}Sign in · {% endblock %}
+
 {% block content %}
 <div class="login panel">
-  <h1>Teacher sign in</h1>
-  <p class="muted">This system is for teachers only. Ask the administrator if you need an account.</p>
+  <h1>Teacher Sign In</h1>
+  <p class="muted">Sign in using your registered account details.</p>
+
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Username <input type="text" name="username" autocomplete="username" required autofocus></label>
-    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-    <button type="submit">Sign in</button>
+
+    <label>
+      Username or Email
+      <input type="text" name="username" autocomplete="username" required autofocus>
+    </label>
+
+    <label>
+      Password
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+
+    <label>
+      Teacher Code
+      <input type="text" name="teacher_code" placeholder="Example: gouri232" required>
+    </label>
+
+    <button type="submit">Sign In</button>
   </form>
+
+  <p>New teacher? <a href="{{ url_for('main.register') }}">Create an account</a></p>
 </div>
 {% endblock %}

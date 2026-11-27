@@ -6,6 +6,9 @@ import re
 import shutil
 import uuid
 import zipfile
+import secrets
+import string
+import sqlite3
 
 from flask import (Blueprint, Response, abort, flash, g, redirect, render_template, request, send_file,
                    session, url_for)
@@ -121,30 +124,127 @@ def add_sheet(db, exam_id, original_name, writer):
 
 
 # ----------------------------------------------------------------- auth
+def generate_teacher_code(username):
+    prefix = re.sub(r"[^a-z0-9]", "", username.lower())
+
+    while True:
+        length = secrets.choice((3, 4))
+        digits = "".join(secrets.choice(string.digits) for _ in range(length))
+        code = prefix + digits
+
+        exists = get_db().execute(
+            "SELECT id FROM teachers WHERE teacher_code = ?", (code,)
+        ).fetchone()
+
+        if not exists:
+            return code
+
+
+@bp.route("/register", methods=["GET", "POST"])
+def register():
+    if g.teacher:
+        return redirect(url_for("main.dashboard"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+
+        if not re.fullmatch(r"[a-z0-9_]{3,30}", username):
+            flash("Username must be 3–30 characters using letters, numbers or underscores.", "error")
+
+        elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            flash("Enter a valid email address.", "error")
+
+        elif len(password) < 8:
+            flash("Password must contain at least 8 characters.", "error")
+
+        elif password != confirm:
+            flash("Passwords do not match.", "error")
+
+        else:
+            db = get_db()
+
+            existing = db.execute(
+                "SELECT id FROM teachers WHERE username = ? OR email = ?",
+                (username, email)
+            ).fetchone()
+
+            if existing:
+                flash("Username or email is already registered.", "error")
+            else:
+                code = generate_teacher_code(username)
+
+                try:
+                    db.execute(
+                        "INSERT INTO teachers "
+                        "(username, email, teacher_code, password_hash, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            username,
+                            email,
+                            code,
+                            generate_password_hash(password),
+                            now()
+                        )
+                    )
+                    db.commit()
+
+                    return render_template(
+                        "register.html",
+                        teacher_code=code
+                    )
+
+                except sqlite3.IntegrityError:
+                    db.rollback()
+                    flash("Account details already exist. Please try another username or email.", "error")
+
+    return render_template("register.html", teacher_code=None)
+
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if g.teacher:
         return redirect(url_for("main.dashboard"))
+
     if request.method == "POST":
         addr = request.remote_addr or "?"
+
         if auth.is_locked(addr):
             flash("Too many failed attempts. Wait a few minutes and try again.", "error")
             return render_template("login.html"), 429
-        username = request.form.get("username", "").strip()
-        row = get_db().execute("SELECT * FROM teachers WHERE username = ?", (username,)).fetchone()
-        # always run a hash check so response time doesn't reveal whether the username exists
-        ok = check_password_hash(row["password_hash"] if row else generate_password_hash("x"),
-                                 request.form.get("password", ""))
-        if row and ok:
+
+        identifier = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+        teacher_code = request.form.get("teacher_code", "").strip().lower()
+
+        row = get_db().execute(
+            "SELECT * FROM teachers WHERE lower(username) = ? OR lower(email) = ?",
+            (identifier, identifier)
+        ).fetchone()
+
+        password_ok = check_password_hash(
+            row["password_hash"] if row else generate_password_hash("dummy-password"),
+            password
+        )
+
+        code_ok = (
+            row is not None
+            and row["teacher_code"] is not None
+            and secrets.compare_digest(row["teacher_code"].lower(), teacher_code)
+        )
+
+        if row and password_ok and code_ok:
             auth.clear_failures(addr)
             session.clear()
             session["teacher_id"] = row["id"]
             session.permanent = True
             return redirect(auth.safe_next(request.args.get("next")))
-        auth.record_failure(addr)
-        flash("Wrong username or password.", "error")
-    return render_template("login.html")
 
+        auth.record_failure(addr)
+        flash("Incorrect username/email, password or Teacher Code.", "error")
+
+    return render_template("login.html")
 
 @bp.route("/logout", methods=["POST"])
 def logout():

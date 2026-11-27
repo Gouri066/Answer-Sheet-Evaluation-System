@@ -10,6 +10,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS teachers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    teacher_code TEXT UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -87,13 +89,43 @@ def connect(path=None):
     return conn
 
 
+# def init_db():
+#     conn = connect()
+#     conn.executescript(SCHEMA)
+#     conn.commit()
+#     conn.close()
+
 def init_db():
     conn = connect()
-    conn.executescript(SCHEMA)
-    conn.commit()
-    conn.close()
+    try:
+        conn.executescript(SCHEMA)
 
+        # Add new teacher account fields to existing databases
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(teachers)").fetchall()
+        }
 
+        if "email" not in columns:
+            conn.execute("ALTER TABLE teachers ADD COLUMN email TEXT")
+
+        if "teacher_code" not in columns:
+            conn.execute("ALTER TABLE teachers ADD COLUMN teacher_code TEXT")
+
+        # Ensure email and Teacher Code are unique
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_teachers_email "
+            "ON teachers(email)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_teachers_code "
+            "ON teachers(teacher_code)"
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+        
 def get_db():
     if "db" not in g:
         g.db = connect()
