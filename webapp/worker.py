@@ -123,15 +123,162 @@ def _try_gemini_vision(file_path, questions):
         return None
 
 
+# def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
+#     notes = []
+#     raw, roll, name = sub["raw_text"], sub["roll_no"], sub["name"]
+#     valid = set(by_num)
+#     # answers = {}
+#     # used_gemini = False
+#     answers = {}
+#     answer_details = {}
+#     used_gemini = False
+
+#     if raw is None:  # first time: read the file
+#         # --- Strategy 1: Try Gemini Vision AI (handles any layout/handwriting) ---
+#         gemini_result = _try_gemini_vision(sub["stored_path"], questions)
+
+#         if gemini_result and gemini_result.get("answers"):
+#             used_gemini = True
+#             raw = gemini_result["raw_text"]
+#             roll = gemini_result["roll_no"] or roll
+#             name = gemini_result["name"] or name
+#             notes += gemini_result.get("warnings", [])
+
+#             # Use answers directly from Gemini (already structured)
+#             # for n, ans_text in gemini_result["answers"].items():
+#             #     if n in by_num and ans_text:
+#             #         answers[n] = ans_text
+#             answer_details = gemini_result.get("answer_details", {})
+
+# for n, ans_text in gemini_result["answers"].items():
+#     if n in by_num and ans_text:
+#         answers[n] = ans_text
+
+#         detail = answer_details.get(n, answer_details.get(str(n), {}))
+#         confidence = detail.get("confidence", "medium")
+#         review_note = detail.get("note", "")
+
+#         if confidence in ("low", "medium"):
+#             message = (
+#                 f"Q{n}: Gemini reading confidence is {confidence}. "
+#                 "Teacher review recommended."
+#             )
+
+#             if review_note:
+#                 message += f" {review_note}"
+
+#             notes.append(message)
+            
+            
+            
+            
+#             if not answers:
+#                 log.info("Gemini returned no matching answers, falling back to OCR")
+#                 used_gemini = False
+#                 raw = None  # reset so fallback runs
+
+#         # --- Strategy 2: Fallback to EasyOCR + regex parsing ---
+#         if not used_gemini:
+#             result = processor.extract(sub["stored_path"])
+#             raw = result.text
+#             notes += result.warnings
+#             if result.ocr_pages:
+#                 notes.append(f"{result.ocr_pages} page(s) were read with OCR - please spot-check the answers.")
+#             if not raw.strip():
+#                 raise ValueError("No readable text was found. If this is a scan, install OCR support "
+#                                  "(pip install easyocr) or set GEMINI_API_KEY for AI-powered reading.")
+#             blocks, header, warns = parser.parse_text(raw, valid)
+#             notes += warns
+#             found = parser.extract_header(header)
+#             roll = found["roll_no"] or roll
+#             name = found["name"] or name
+
+#             unknown = []
+#             for n, block in blocks.items():
+#                 if n in by_num:
+#                     answers[n] = parser.clean_answer(block, by_num[n]["question"])
+#                 else:
+#                     unknown.append(n)
+#             if unknown:
+#                 notes.append("Ignored answers for question numbers not in the key: "
+#                              + ", ".join(f"Q{n}" for n in sorted(unknown)[:15]))
+
+#     else:
+#         # Re-evaluation with stored raw_text
+#         # Try Gemini Vision again from the original file (re-reads the image)
+#         gemini_result = _try_gemini_vision(sub["stored_path"], questions)
+
+#         if gemini_result and gemini_result.get("answers"):
+#             used_gemini = True
+#             raw = gemini_result["raw_text"]
+#             roll = gemini_result["roll_no"] or roll
+#             name = gemini_result["name"] or name
+#             notes += gemini_result.get("warnings", [])
+
+#             for n, ans_text in gemini_result["answers"].items():
+#                 if n in by_num and ans_text:
+#                     answers[n] = ans_text
+        
+#         if not used_gemini:
+#             # Fallback: re-parse the stored raw text
+#             blocks, _, warns = parser.parse_text(raw, valid)
+#             notes += warns
+
+#             for n, block in blocks.items():
+#                 if n in by_num:
+#                     answers[n] = parser.clean_answer(block, by_num[n]["question"])
+
+#     if not answers:
+#         raise ValueError("No answers were detected. Try setting GEMINI_API_KEY for AI-powered reading, "
+#                          "or check that answers are numbered (Q1:, 1., 1) ...).")
+
+#     unanswered = [n for n in by_num if not answers.get(n)]
+#     if unanswered:
+#         notes.append(f"No answer found for {len(unanswered)} question(s).")
+
+#     results = engine.score_answers(answers)
+#     for r in results:
+#     n = r["number"]
+#     detail = answer_details.get(n, answer_details.get(str(n), {}))
+#     confidence = detail.get("confidence", "medium")
+#     review_note = detail.get("note", "")
+
+#     if confidence in ("low", "medium"):
+#         warning = f"Teacher review recommended: Gemini confidence is {confidence}."
+
+#         if review_note:
+#             warning += f" {review_note}"
+
+#         existing_note = r.get("note", "")
+#         r["note"] = f"{existing_note} {warning}".strip()
+#     total = round(sum(r["marks"] for r in results), 2)
+#     max_total = round(sum(r["max_marks"] for r in results), 2)
+#     pct = round(total / max_total * 100, 2) if max_total else 0.0
+
+#     backend_label = "gemini-vision" if used_gemini else engine.backend
+
+#     conn.execute("DELETE FROM answers WHERE submission_id = ?", (sub["id"],))
+#     conn.executemany(
+#         "INSERT INTO answers (submission_id, number, answer_text, grammar, keyword, semantic, marks, max_marks,"
+#         " matched, missing, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+#         [(sub["id"], r["number"], r["answer_text"], r["grammar"], r["keyword"], r["semantic"], r["marks"],
+#           r["max_marks"], json.dumps(r["matched"]), json.dumps(r["missing"]), r["note"]) for r in results])
+#     conn.execute(
+#         "UPDATE submissions SET raw_text=?, roll_no=?, name=?, status='done', note=?, total=?, max_total=?,"
+#         " percentage=?, backend=?, evaluated_at=? WHERE id=?",
+#         (raw, roll, name, " ".join(notes)[:1000], total, max_total, pct, backend_label, now(), sub["id"]))
+#     conn.commit()
+
 def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
     notes = []
     raw, roll, name = sub["raw_text"], sub["roll_no"], sub["name"]
     valid = set(by_num)
     answers = {}
+    answer_details = {}
     used_gemini = False
 
-    if raw is None:  # first time: read the file
-        # --- Strategy 1: Try Gemini Vision AI (handles any layout/handwriting) ---
+    if raw is None:
+        # Strategy 1: Gemini Vision
         gemini_result = _try_gemini_vision(sub["stored_path"], questions)
 
         if gemini_result and gemini_result.get("answers"):
@@ -141,28 +288,53 @@ def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
             name = gemini_result["name"] or name
             notes += gemini_result.get("warnings", [])
 
-            # Use answers directly from Gemini (already structured)
+            answer_details = gemini_result.get("answer_details", {})
+
             for n, ans_text in gemini_result["answers"].items():
                 if n in by_num and ans_text:
                     answers[n] = ans_text
 
+                    detail = answer_details.get(
+                        n, answer_details.get(str(n), {})
+                    )
+                    confidence = detail.get("confidence", "medium")
+                    review_note = detail.get("note", "")
+
+                    if confidence in ("low", "medium"):
+                        message = (
+                            f"Q{n}: Gemini reading confidence is {confidence}. "
+                            "Teacher review recommended."
+                        )
+                        if review_note:
+                            message += f" {review_note}"
+                        notes.append(message)
+
             if not answers:
                 log.info("Gemini returned no matching answers, falling back to OCR")
                 used_gemini = False
-                raw = None  # reset so fallback runs
+                raw = None
 
-        # --- Strategy 2: Fallback to EasyOCR + regex parsing ---
+        # Strategy 2: EasyOCR + regex fallback
         if not used_gemini:
             result = processor.extract(sub["stored_path"])
             raw = result.text
             notes += result.warnings
+
             if result.ocr_pages:
-                notes.append(f"{result.ocr_pages} page(s) were read with OCR - please spot-check the answers.")
+                notes.append(
+                    f"{result.ocr_pages} page(s) were read with OCR - "
+                    "please spot-check the answers."
+                )
+
             if not raw.strip():
-                raise ValueError("No readable text was found. If this is a scan, install OCR support "
-                                 "(pip install easyocr) or set GEMINI_API_KEY for AI-powered reading.")
+                raise ValueError(
+                    "No readable text was found. If this is a scan, install OCR "
+                    "support (pip install easyocr) or set GEMINI_API_KEY."
+                )
+
             blocks, header, warns = parser.parse_text(raw, valid)
             notes += warns
+
             found = parser.extract_header(header)
             roll = found["roll_no"] or roll
             name = found["name"] or name
@@ -170,16 +342,20 @@ def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
             unknown = []
             for n, block in blocks.items():
                 if n in by_num:
-                    answers[n] = parser.clean_answer(block, by_num[n]["question"])
+                    answers[n] = parser.clean_answer(
+                        block, by_num[n]["question"]
+                    )
                 else:
                     unknown.append(n)
+
             if unknown:
-                notes.append("Ignored answers for question numbers not in the key: "
-                             + ", ".join(f"Q{n}" for n in sorted(unknown)[:15]))
+                notes.append(
+                    "Ignored answers for question numbers not in the key: "
+                    + ", ".join(f"Q{n}" for n in sorted(unknown)[:15])
+                )
 
     else:
-        # Re-evaluation with stored raw_text
-        # Try Gemini Vision again from the original file (re-reads the image)
+        # Re-evaluation using the original file
         gemini_result = _try_gemini_vision(sub["stored_path"], questions)
 
         if gemini_result and gemini_result.get("answers"):
@@ -189,42 +365,103 @@ def _evaluate(conn, sub, engine, parser, processor, by_num, questions):
             name = gemini_result["name"] or name
             notes += gemini_result.get("warnings", [])
 
+            answer_details = gemini_result.get("answer_details", {})
+
             for n, ans_text in gemini_result["answers"].items():
                 if n in by_num and ans_text:
                     answers[n] = ans_text
-        
+
+                    detail = answer_details.get(
+                        n, answer_details.get(str(n), {})
+                    )
+                    confidence = detail.get("confidence", "medium")
+                    review_note = detail.get("note", "")
+
+                    if confidence in ("low", "medium"):
+                        message = (
+                            f"Q{n}: Gemini reading confidence is {confidence}. "
+                            "Teacher review recommended."
+                        )
+                        if review_note:
+                            message += f" {review_note}"
+                        notes.append(message)
+
         if not used_gemini:
-            # Fallback: re-parse the stored raw text
             blocks, _, warns = parser.parse_text(raw, valid)
             notes += warns
 
             for n, block in blocks.items():
                 if n in by_num:
-                    answers[n] = parser.clean_answer(block, by_num[n]["question"])
+                    answers[n] = parser.clean_answer(
+                        block, by_num[n]["question"]
+                    )
 
     if not answers:
-        raise ValueError("No answers were detected. Try setting GEMINI_API_KEY for AI-powered reading, "
-                         "or check that answers are numbered (Q1:, 1., 1) ...).")
+        raise ValueError(
+            "No answers were detected. Try setting GEMINI_API_KEY for "
+            "AI-powered reading, or check that answers are numbered."
+        )
 
     unanswered = [n for n in by_num if not answers.get(n)]
     if unanswered:
-        notes.append(f"No answer found for {len(unanswered)} question(s).")
+        notes.append(
+            f"No answer found for {len(unanswered)} question(s)."
+        )
 
     results = engine.score_answers(answers)
+
+    # Attach confidence warnings to individual answer records
+    for r in results:
+        n = r["number"]
+        detail = answer_details.get(
+            n, answer_details.get(str(n), {})
+        )
+        confidence = detail.get("confidence", "medium")
+        review_note = detail.get("note", "")
+
+        if used_gemini and confidence in ("low", "medium"):
+            warning = (
+                f"Teacher review recommended: "
+                f"Gemini confidence is {confidence}."
+            )
+
+            if review_note:
+                warning += f" {review_note}"
+
+            existing_note = r.get("note", "")
+            r["note"] = f"{existing_note} {warning}".strip()
+
     total = round(sum(r["marks"] for r in results), 2)
     max_total = round(sum(r["max_marks"] for r in results), 2)
     pct = round(total / max_total * 100, 2) if max_total else 0.0
 
     backend_label = "gemini-vision" if used_gemini else engine.backend
 
-    conn.execute("DELETE FROM answers WHERE submission_id = ?", (sub["id"],))
+    conn.execute(
+        "DELETE FROM answers WHERE submission_id = ?",
+        (sub["id"],)
+    )
+
     conn.executemany(
         "INSERT INTO answers (submission_id, number, answer_text, grammar, keyword, semantic, marks, max_marks,"
         " matched, missing, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        [(sub["id"], r["number"], r["answer_text"], r["grammar"], r["keyword"], r["semantic"], r["marks"],
-          r["max_marks"], json.dumps(r["matched"]), json.dumps(r["missing"]), r["note"]) for r in results])
+        [
+            (
+                sub["id"], r["number"], r["answer_text"], r["grammar"],
+                r["keyword"], r["semantic"], r["marks"], r["max_marks"],
+                json.dumps(r["matched"]), json.dumps(r["missing"]), r["note"]
+            )
+            for r in results
+        ]
+    )
+
     conn.execute(
         "UPDATE submissions SET raw_text=?, roll_no=?, name=?, status='done', note=?, total=?, max_total=?,"
         " percentage=?, backend=?, evaluated_at=? WHERE id=?",
-        (raw, roll, name, " ".join(notes)[:1000], total, max_total, pct, backend_label, now(), sub["id"]))
+        (
+            raw, roll, name, " ".join(notes)[:1000], total, max_total,
+            pct, backend_label, now(), sub["id"]
+        )
+    )
+
     conn.commit()
